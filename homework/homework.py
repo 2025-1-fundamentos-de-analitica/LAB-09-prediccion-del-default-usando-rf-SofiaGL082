@@ -93,3 +93,127 @@
 # {'type': 'cm_matrix', 'dataset': 'test', 'true_0': {"predicted_0": 15562, "predicte_1": 650}, 'true_1': {"predicted_0": 2490, "predicted_1": 1420}}
 #
 # flake8: noqa: E501
+
+import pickle
+import gzip
+import os
+import json
+import pandas as pd
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import precision_score, balanced_accuracy_score, recall_score, f1_score, confusion_matrix
+
+def preparar_dataset(dataframe):
+    dataframe = dataframe.rename(columns={"default payment next month": "objetivo"})
+    dataframe = dataframe.drop(columns="ID")
+    dataframe = dataframe.dropna()
+    dataframe = dataframe[(dataframe["SEX"] != 0) & (dataframe["EDUCATION"] != 0) & (dataframe["MARRIAGE"] != 0)]
+    dataframe.loc[dataframe["EDUCATION"] > 4, "EDUCATION"] = 4
+    return dataframe
+
+def armar_modelo():
+    codificacion = ColumnTransformer(
+        transformers=[
+            ("onehot", OneHotEncoder(dtype="int", handle_unknown="ignore"), ["SEX", "EDUCATION", "MARRIAGE"])
+        ],
+        remainder="passthrough"
+    )
+
+    modelo_final = Pipeline(
+        steps=[
+            ("preproceso", codificacion),
+            ("modelo", RandomForestClassifier(random_state=42))
+        ],
+        verbose=False
+    )
+
+    return modelo_final
+
+def buscar_hiperparametros(modelo_base, parametros, n_folds=10):
+    buscador = GridSearchCV(
+        estimator=modelo_base,
+        param_grid=parametros,
+        scoring="balanced_accuracy",
+        cv=n_folds,
+        n_jobs=-1,
+    )
+    return buscador
+
+def exportar_modelo(objeto_entrenado):
+    os.makedirs("files/models", exist_ok=True)
+    with gzip.open("files/models/model.pkl.gz", "wb") as archivo:
+        pickle.dump(objeto_entrenado, archivo)
+
+def obtener_metricas(y_real, y_estimado, nombre_conjunto):
+    return {
+        "type": "metrics",
+        "dataset": nombre_conjunto,
+        "precision": precision_score(y_real, y_estimado),
+        "balanced_accuracy": balanced_accuracy_score(y_real, y_estimado),
+        "recall": recall_score(y_real, y_estimado),
+        "f1_score": f1_score(y_real, y_estimado)
+    }
+
+def obtener_matriz_confusion(y_real, y_estimado, nombre_conjunto):
+    tn, fp, fn, tp = confusion_matrix(y_real, y_estimado).ravel()
+    return {
+        "type": "cm_matrix",
+        "dataset": nombre_conjunto,
+        "true_0": {"predicted_0": int(tn), "predicted_1": int(fp)},
+        "true_1": {"predicted_0": int(fn), "predicted_1": int(tp)}
+    }
+
+def guardar_metricas(lista_metricas):
+    os.makedirs("files/output", exist_ok=True)
+    with open("files/output/metrics.json", "w") as salida:
+        for linea in lista_metricas:
+            salida.write(json.dumps(linea) + "\n")
+
+# Lectura de datos
+datos_train = pd.read_csv("files/input/train_data.csv.zip", compression="zip")
+datos_test = pd.read_csv("files/input/test_data.csv.zip", compression="zip")
+
+# Limpieza
+datos_train = preparar_dataset(datos_train)
+datos_test = preparar_dataset(datos_test)
+
+# Separación
+X_train = datos_train.drop(columns="objetivo")
+y_train = datos_train["objetivo"]
+X_test = datos_test.drop(columns="objetivo")
+y_test = datos_test["objetivo"]
+
+# Crear pipeline y entrenar
+modelo_base = armar_modelo()
+modelo_base.fit(X_train, y_train)
+
+# Optimización
+parametros_grid = {
+    "modelo__n_estimators": [300, 500],
+    "modelo__max_depth": [20, 30],
+    "modelo__min_samples_split": [2, 5],
+    "modelo__min_samples_leaf": [1, 2]
+}
+modelo_cv = buscar_hiperparametros(modelo_base, parametros_grid)
+modelo_cv.fit(X_train, y_train)
+
+# Guardar modelo entrenado
+exportar_modelo(modelo_cv)
+
+# Predicciones
+pred_train = modelo_cv.predict(X_train)
+pred_test = modelo_cv.predict(X_test)
+
+# Métricas
+metricas_train = obtener_metricas(y_train, pred_train, "train")
+metricas_test = obtener_metricas(y_test, pred_test, "test")
+
+matriz_train = obtener_matriz_confusion(y_train, pred_train, "train")
+matriz_test = obtener_matriz_confusion(y_test, pred_test, "test")
+
+# Guardar resultados
+resultados_totales = [metricas_train, metricas_test, matriz_train, matriz_test]
+guardar_metricas(resultados_totales)
