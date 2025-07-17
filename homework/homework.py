@@ -217,3 +217,5 @@ matriz_test = obtener_matriz_confusion(y_test, pred_test, "test")
 # Guardar resultados
 resultados_totales = [metricas_train, metricas_test, matriz_train, matriz_test]
 guardar_metricas(resultados_totales)
+
+
