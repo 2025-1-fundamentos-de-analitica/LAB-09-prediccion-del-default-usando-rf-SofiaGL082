@@ -1,5 +1,4 @@
 ipykernel
-scipy==1.13.0
-pandas==2.2.2
+pandas
 pytest
 scikit-learn
